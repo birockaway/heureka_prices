@@ -5,12 +5,13 @@ import pandas as pd
 import logging
 from keboola import docker
 import datetime
+import os
 
 
 
 
 
-KBC_DATADIR = os.environ(KBC_DATADIR)
+KBC_DATADIR = os.environ.get("KBC_DATADIR")
 
 
 utctime_started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
