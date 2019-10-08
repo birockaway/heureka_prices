@@ -6,6 +6,7 @@ import logging
 from keboola import docker
 import datetime
 import os
+from contextlib import suppress
 
 
 
@@ -194,9 +195,10 @@ async def main():
         ]
         await asyncio.gather(*tasks)
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# ignore timeout errors
+with suppress(asyncio.TimeoutError):
+    if __name__ == "__main__":
+        asyncio.run(main())
 
 # drop NAs
 result_list = (item for item in result_list if item)
