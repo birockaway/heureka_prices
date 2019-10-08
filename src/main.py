@@ -193,7 +193,7 @@ async def main():
             asyncio.ensure_future(fetch_one(client, api_url, api_key, product_id, language))
             for product_id in product_list
         ]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 # ignore timeout errors
 with suppress(asyncio.TimeoutError):
