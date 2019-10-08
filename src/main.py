@@ -213,7 +213,7 @@ logging.info(f"Output rowcount: {len(results)}")
 results_dataframe = pd.DataFrame(results).reindex(wanted_columns, axis='columns')
 results_dataframe["utctime_started"] = utctime_started
 
-result_products = results_dataframe[product_id_column_name].unique().tolist()
+result_products = results_dataframe["product_id"].unique().tolist()
 logging.info(f"Output unique products: {len(result_products)}")
 
 missing_products = list(set(product_list ) - set(result_products))
