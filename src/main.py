@@ -212,10 +212,6 @@ if __name__ == "__main__":
 
     # log parameters (excluding sensitive designated by '#')
     logging.info({k: v for k, v in parameters.items() if "#" not in k})
-
-    #debug
-    with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
-        print(input_file.read()[:1000])
         
     # read unique product ids
     with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
