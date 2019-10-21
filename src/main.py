@@ -8,6 +8,7 @@ import itertools
 import csv
 import os
 from contextlib import suppress, contextmanager
+import re
 
 
 def process_product(product_json):
@@ -220,6 +221,7 @@ if __name__ == "__main__":
                 for pid
                 # read all input file rows, except the header
                 in input_file.read().split(os.linesep)[1:]
+                if re.match('"[0-9]+"$', pid)
             }
 
     logging.info(f"Input unique products: {len(product_ids)}")
