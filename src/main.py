@@ -216,7 +216,7 @@ if __name__ == "__main__":
     # read unique product ids
     with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
         product_ids = {
-                int(pid)
+                int(pid.replace('"', ''))
                 for pid
                 # read all input file rows, except the header
                 in input_file.read().split(os.linesep)[1:]
