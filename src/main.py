@@ -199,27 +199,24 @@ if __name__ == "__main__":
     logging.info("Extracting parameters from config.")
 
     input_filename = parameters.get("input_filename")
+    output_result_filename = parameters.get("output_result_filename")
+    output_fails_filename = parameters.get("output_fails_filename")
     product_id_column_name = parameters.get("product_id_column_name")
     wanted_columns = parameters.get("wanted_columns")
 
     # log parameters (excluding sensitive designated by '#')
     logging.info({k: v for k, v in parameters.items() if "#" not in k})
-        
     # read unique product ids
     with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
         original_product_ids = {
-                int(pid.replace('"', ''))
-                for pid
-                # read all input file rows, except the header
-                in input_file.read().split(os.linesep)[1:]
-                if pid.isnumeric()
+                int(row[product_id_column_name]) for row in csv.DictReader(input_file)
             }
         product_ids = list(original_product_ids)
 
     logging.info(f"Input unique products: {len(original_product_ids)}")
 
     with PriceWriter(
-                target_file_name=f'{kbc_datadir}out/tables/heureka_prices.csv',
+                target_file_name=f'{kbc_datadir}out/tables/{output_result_filename}.csv',
                 colnames=wanted_columns + ['utctime_started'],
                 prod_id_colname='product_id',
             ) as writer:
@@ -274,7 +271,7 @@ if __name__ == "__main__":
         missing_products = list(original_product_ids - set(writer.result_products))
 
     logging.info(f"Missing product #: {len(missing_products)}")
-    with open(f'{kbc_datadir}out/tables/heureka_missing_products.csv', 'w', encoding='utf8') as missf:
+    with open(f'{kbc_datadir}out/tables/{output_fails_filename}.csv', 'w', encoding='utf8') as missf:
         missf.writelines(os.linesep.join(["product_id"] + list(map(str, missing_products))))
 
     logging.info("Script done.")
