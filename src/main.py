@@ -4,11 +4,10 @@ import time
 import logging
 from keboola import docker
 import datetime
-import itertools
+from collections import defaultdict
 import csv
 import os
 from contextlib import suppress, contextmanager
-import re
 
 
 def process_product(product_json):
@@ -20,7 +19,7 @@ def process_product(product_json):
         f'product_{k}': v
         for k, v
         in product_json.items()
-        if k in [
+        if k in {
             "id",
             "name",
             "slug",
@@ -34,7 +33,7 @@ def process_product(product_json):
             "category_position",
             "offer_attributes",
             "images",
-        ]
+        }
     }
 
 
@@ -108,23 +107,15 @@ def process_response(response_json):
 
 
 def batches(product_list, batch_size, window_size, sleep_time=5):
-    prod_batch_generator = (
-            (k, [prod_id for _, prod_id in g])
-            for k, g
-            in itertools.groupby(enumerate(product_list), key=lambda x_: x_[0] // batch_size)
-        )
-
-    # yield the first batch without waiting
     window_start = time.monotonic()
-    yield next(prod_batch_generator, (None, []))
+    while product_list:
+        batch = product_list[:batch_size]
+        del product_list[:batch_size]
 
-    for batch in prod_batch_generator:
-        # if the batch was processed too fast, wait until the allotted time window expires
         while time.monotonic() - window_start < window_size:
             logging.info('waiting for time window to expire...')
             time.sleep(sleep_time)
         window_start = time.monotonic()
-        # yield batch for processing
         yield batch
 
 
@@ -156,7 +147,7 @@ class PriceWriter:
 
     def writerows(self, rows):
         self.writer.writerows(rows)
-        self.result_products.update(_.get(self.prod_id_colname) for _ in rows if _)
+        self.result_products.update(row.get(self.prod_id_colname) for row in rows if row)
         self.total_rows += len(rows) if rows else 0
 
 
@@ -216,15 +207,16 @@ if __name__ == "__main__":
         
     # read unique product ids
     with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
-        product_ids = {
+        original_product_ids = {
                 int(pid.replace('"', ''))
                 for pid
                 # read all input file rows, except the header
                 in input_file.read().split(os.linesep)[1:]
-                if re.match('"[0-9]+"$', pid)
+                if pid.isnumeric()
             }
+        product_ids = list(original_product_ids)
 
-    logging.info(f"Input unique products: {len(product_ids)}")
+    logging.info(f"Input unique products: {len(original_product_ids)}")
 
     with PriceWriter(
                 target_file_name=f'{kbc_datadir}out/tables/heureka_prices.csv',
@@ -232,8 +224,12 @@ if __name__ == "__main__":
                 prod_id_colname='product_id',
             ) as writer:
         with time_logger():
-            for batch_i, product_batch in batches(product_ids, batch_size=9900, window_size=60):
+            attempts = defaultdict(int)
+            for batch_i, product_batch in enumerate(batches(product_ids, batch_size=9900, window_size=61)):
                 logging.info(f"Downloading batch {batch_i}")
+
+                for pid in product_batch:
+                    attempts[pid] += 1
 
                 result_list = asyncio.run(fetch_batch(
                     product_list=product_batch,
@@ -249,26 +245,36 @@ if __name__ == "__main__":
                             **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
                             **{'utctime_started': utctime_started}
                         }
-                        for sublist
-                        in result_list
+                        for sublist in result_list
                         # drop empty sublists or None results
                         if sublist
-                        for item
-                        in sublist
+                        for item in sublist
                     ]
 
                 logging.info(f"Writing batch {batch_i}")
                 # append results to the target file
                 writer.writerows(results)
+                success_ids = {result['product_id'] for result in results}
+                failed_ids = set(product_batch).difference(success_ids)
+                failed_under_five_attempts = [
+                    pid for pid in failed_ids
+                    if attempts[pid] < 5
+                ]
+                product_ids.extend(failed_under_five_attempts)
+
+                logging.info(f'{len(success_ids)} IDs retrieved successfully')
+                logging.info(f'{len(failed_ids)} IDs failed')
+                logging.info(f'{len(failed_under_five_attempts)} IDs requeued for extraction')
+
 
         logging.info(f"Output row #: {writer.total_rows}")
-        logging.info(f"Output unique product #: {len(writer.result_products)}")
+        logging.info(f"Output unique products #: {len(writer.result_products)}")
 
         # log what was not returned
-        missing_products = list(product_ids - set(writer.result_products))
+        missing_products = list(original_product_ids - set(writer.result_products))
 
     logging.info(f"Missing product #: {len(missing_products)}")
     with open(f'{kbc_datadir}out/tables/heureka_missing_products.csv', 'w', encoding='utf8') as missf:
-        missf.writelines(os.linesep.join(["product_id"] + list(str(_) for _ in missing_products)))
+        missf.writelines(os.linesep.join(["product_id"] + list(map(str, missing_products))))
 
     logging.info("Script done.")
