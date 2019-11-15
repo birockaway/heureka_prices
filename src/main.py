@@ -1,13 +1,17 @@
 import asyncio
 import aiohttp
 import time
-import logging
 from keboola import docker
 import datetime
 from collections import defaultdict
 import csv
 import os
 from contextlib import suppress, contextmanager
+
+
+def log(message, level='INFO'):
+    timestamp = datetime.datetime.now().strftime(format='%Y%m%d %H:%M:%S.%f')
+    print(f'{timestamp} - {level} - {message}')
 
 
 def process_product(product_json):
@@ -66,9 +70,9 @@ def process_response(response_json):
         response_content = response_json["result"]["product"]
 
     except Exception as e:
-        logging.debug('Response does not contain product data.')
-        logging.debug(f"Exception {e}")
-        logging.debug(response_json)
+        log('Response does not contain product data.', level='DEBUG')
+        log(f"Exception {e}", level='DEBUG')
+        log(response_json, level='DEBUG')
         return None
 
     if response_content is None:
@@ -101,7 +105,7 @@ def process_response(response_json):
             return result
 
         except Exception as e:
-            logging.exception(e)
+            log(e, level='EXCEPTION')
 
             return None
 
@@ -113,7 +117,7 @@ def batches(product_list, batch_size, window_size, sleep_time=5):
         del product_list[:batch_size]
 
         while time.monotonic() - window_start < window_size:
-            logging.info('waiting for time window to expire...')
+            log('waiting for time window to expire...')
             time.sleep(sleep_time)
         window_start = time.monotonic()
         yield batch
@@ -157,7 +161,7 @@ def time_logger():
     try:
         yield
     finally:
-        logging.info(f"Duration: {round(time.monotonic() - start)} seconds")
+        log(f"Duration: {round(time.monotonic() - start)} seconds")
 
 
 async def fetch_one(product_results, client, url, key, product_id, language):
@@ -190,14 +194,11 @@ if __name__ == "__main__":
 
     utctime_started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-    logging.basicConfig(format='%(name)s, %(asctime)s, %(levelname)s, %(message)s',
-                        level=logging.DEBUG)
-
     cfg = docker.Config(kbc_datadir)
     parameters = cfg.get_parameters()
 
     print(datetime.datetime.now(), 'EXTRACTION BEGINS')
-    logging.info("Extracting parameters from config.")
+    log("Extracting parameters from config.")
 
     input_filename = parameters.get("input_filename")
     output_result_filename = parameters.get("output_result_filename")
@@ -207,7 +208,7 @@ if __name__ == "__main__":
     max_attempts = int(parameters.get("max_attempts", "1"))
 
     # log parameters (excluding sensitive designated by '#')
-    logging.info({k: v for k, v in parameters.items() if "#" not in k})
+    log({k: v for k, v in parameters.items() if "#" not in k})
     # read unique product ids
     with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
         original_product_ids = {
@@ -215,8 +216,8 @@ if __name__ == "__main__":
             }
         product_ids = list(original_product_ids)
 
-    logging.info(f"Input unique products: {len(original_product_ids)}")
-    logging.info(f"product_ids sample: {product_ids[:5]}")
+    log(f"Input unique products: {len(original_product_ids)}")
+    log(f"product_ids sample: {product_ids[:5]}")
 
     with PriceWriter(
                 target_file_name=f'{kbc_datadir}out/tables/{output_result_filename}.csv',
@@ -226,7 +227,7 @@ if __name__ == "__main__":
         with time_logger():
             attempts = defaultdict(int)
             for batch_i, product_batch in enumerate(batches(product_ids, batch_size=9900, window_size=61)):
-                logging.info(f"Downloading batch {batch_i}")
+                log(f"Downloading batch {batch_i}")
 
                 for pid in product_batch:
                     attempts[pid] += 1
@@ -251,7 +252,7 @@ if __name__ == "__main__":
                         for item in sublist
                     ]
 
-                logging.info(f"Writing batch {batch_i}")
+                log(f"Writing batch {batch_i}")
                 # append results to the target file
                 writer.writerows(results)
                 success_ids = {result['product_id'] for result in results}
@@ -262,19 +263,19 @@ if __name__ == "__main__":
                 ]
                 product_ids.extend(failed_under_max_attempts)
 
-                logging.info(f'{len(success_ids)} IDs retrieved successfully')
-                logging.info(f'{len(failed_ids)} IDs failed')
-                logging.info(f'{len(failed_under_max_attempts)} IDs requeued for extraction')
+                log(f'{len(success_ids)} IDs retrieved successfully')
+                log(f'{len(failed_ids)} IDs failed')
+                log(f'{len(failed_under_max_attempts)} IDs requeued for extraction')
 
 
-        logging.info(f"Output row #: {writer.total_rows}")
-        logging.info(f"Output unique products #: {len(writer.result_products)}")
+        log(f"Output row #: {writer.total_rows}")
+        log(f"Output unique products #: {len(writer.result_products)}")
 
         # log what was not returned
         missing_products = list(original_product_ids - set(writer.result_products))
 
-    logging.info(f"Missing product #: {len(missing_products)}")
+    log(f"Missing product #: {len(missing_products)}")
     with open(f'{kbc_datadir}out/tables/{output_fails_filename}.csv', 'w', encoding='utf8') as missf:
         missf.writelines(os.linesep.join(["product_id"] + list(map(str, missing_products))))
 
-    logging.info("Script done.")
+    log("Script done.")
