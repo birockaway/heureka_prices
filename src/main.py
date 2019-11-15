@@ -196,6 +196,7 @@ if __name__ == "__main__":
     cfg = docker.Config(kbc_datadir)
     parameters = cfg.get_parameters()
 
+    print(datetime.datetime.now(), 'EXTRACTION BEGINS')
     logging.info("Extracting parameters from config.")
 
     input_filename = parameters.get("input_filename")
@@ -203,6 +204,7 @@ if __name__ == "__main__":
     output_fails_filename = parameters.get("output_fails_filename")
     product_id_column_name = parameters.get("product_id_column_name")
     wanted_columns = parameters.get("wanted_columns")
+    max_attempts = int(parameters.get("max_attempts", "1"))
 
     # log parameters (excluding sensitive designated by '#')
     logging.info({k: v for k, v in parameters.items() if "#" not in k})
@@ -214,6 +216,7 @@ if __name__ == "__main__":
         product_ids = list(original_product_ids)
 
     logging.info(f"Input unique products: {len(original_product_ids)}")
+    logging.info(f"product_ids sample: {original_product_ids[:5]}")
 
     with PriceWriter(
                 target_file_name=f'{kbc_datadir}out/tables/{output_result_filename}.csv',
@@ -253,15 +256,15 @@ if __name__ == "__main__":
                 writer.writerows(results)
                 success_ids = {result['product_id'] for result in results}
                 failed_ids = set(product_batch).difference(success_ids)
-                failed_under_five_attempts = [
+                failed_under_max_attempts = [
                     pid for pid in failed_ids
-                    if attempts[pid] < 5
+                    if attempts[pid] < max_attempts
                 ]
-                product_ids.extend(failed_under_five_attempts)
+                product_ids.extend(failed_under_max_attempts)
 
                 logging.info(f'{len(success_ids)} IDs retrieved successfully')
                 logging.info(f'{len(failed_ids)} IDs failed')
-                logging.info(f'{len(failed_under_five_attempts)} IDs requeued for extraction')
+                logging.info(f'{len(failed_under_max_attempts)} IDs requeued for extraction')
 
 
         logging.info(f"Output row #: {writer.total_rows}")
