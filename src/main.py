@@ -216,7 +216,7 @@ if __name__ == "__main__":
         product_ids = list(original_product_ids)
 
     logging.info(f"Input unique products: {len(original_product_ids)}")
-    logging.info(f"product_ids sample: {original_product_ids[:5]}")
+    logging.info(f"product_ids sample: {product_ids[:5]}")
 
     with PriceWriter(
                 target_file_name=f'{kbc_datadir}out/tables/{output_result_filename}.csv',
