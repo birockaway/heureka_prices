@@ -212,7 +212,7 @@ if __name__ == "__main__":
     log(f"product_ids sample: {product_ids[:5]}")
 
     attempts = defaultdict(int)
-    output = []
+    written_ids = set()
 
     with time_logger():
         for batch_i, product_batch in enumerate(batches(product_ids, batch_size=9900, window_size=61)):
@@ -229,7 +229,7 @@ if __name__ == "__main__":
             log(f"Scraped batch {batch_i}")
 
             # flatten and transform results
-            results = [
+            batch_results = [
                     # filter item columns to only relevant ones and add utctime_started
                     {
                         **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
@@ -238,10 +238,11 @@ if __name__ == "__main__":
                     for sublist in result_list if sublist
                     for item in sublist
                 ]
-            output.extend(results)
             log(f"Parsed batch {batch_i}")
 
-            success_ids = {result['product_id'] for result in results}
+            batch_output = pd.DataFrame(batch_results, columns=wanted_columns + ['utctime_started'])
+            batch_output = batch_output.groupby(['product_id', 'shop_id', 'offer_id'], as_index=False).first()
+            success_ids = set(batch_output['product_id'].unique())
             failed_ids = set(product_batch).difference(success_ids)
 
             if max_attempts > 1:
@@ -257,27 +258,21 @@ if __name__ == "__main__":
             log(f'{len(failed_ids)} IDs failed')
             log(f'{len(failed_under_max_attempts)} IDs requeued for extraction')
 
-    output = pd.DataFrame(output)
-    output = pd.concat([
-        output,
-        pd.DataFrame(columns=wanted_columns + ['utctime_started'])
-    ])
+            log(f'Saving batch {batch_i}')
+            batch_output.to_csv(f'{kbc_datadir}out/tables/{output_result_filename}.csv',
+                                index=False, mode='a', header=not batch_i, columns=sorted(batch_output.columns))
+            written_ids = written_ids.union(success_ids)
 
-    output = output.groupby(['product_id', 'shop_id', 'offer_id'], as_index=False).first()
-    scraped_products = set(output['product_id'].unique())
-    missing_products = list(original_product_ids - scraped_products)
-    log(f"Output unique products #: {len(scraped_products)}")
+    missing_products = list(original_product_ids - written_ids)
+    log(f"Output unique products #: {len(written_ids)}")
     log(f"Missing product #: {len(missing_products)}")
-
-    log('Saving data')
-    output.to_csv(f'{kbc_datadir}out/tables/{output_result_filename}.csv', index=False)
 
     log('Saving runs history')
     run_log = pd.DataFrame(
         {
             'DATETIME': [utctime_started],
             'RUN_TYPE': [run_type],
-            'SUCCEEDED_COUNT': [len(scraped_products)],
+            'SUCCEEDED_COUNT': [len(written_ids)],
             'FAILED_COUNT': [len(missing_products)]
         }
     )
