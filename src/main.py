@@ -2,15 +2,15 @@ import asyncio
 import aiohttp
 import time
 from keboola import docker
-import datetime
+from datetime import datetime
 from collections import defaultdict
-import csv
 import os
-from contextlib import suppress, contextmanager
+from contextlib import contextmanager
+import pandas as pd
 
 
 def log(message, level='INFO'):
-    timestamp = datetime.datetime.now().strftime(format='%Y%m%d %H:%M:%S.%f')
+    timestamp = datetime.now().strftime('%Y%m%d %H:%M:%S.%f')
     print(f'{timestamp} - {level} - {message}')
 
 
@@ -123,38 +123,6 @@ def batches(product_list, batch_size, window_size, sleep_time=5):
         yield batch
 
 
-class PriceWriter:
-
-    def __init__(self, target_file_name, colnames, prod_id_colname):
-        self.result_file = None
-        self.result_file_name = target_file_name
-        self.writer = None
-        self.colnames = colnames
-
-        self.prod_id_colname = prod_id_colname
-        self.result_products = set()
-        self.total_rows = 0
-
-    def __enter__(self):
-        with suppress(FileNotFoundError):
-            os.remove(self.result_file_name)
-
-        self.result_file = open(self.result_file_name, 'a', encoding='utf8')
-        self.writer = csv.DictWriter(self.result_file, fieldnames=self.colnames)
-        self.writer.writeheader()
-
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        with suppress(FileNotFoundError):
-            self.result_file.close()
-
-    def writerows(self, rows):
-        self.writer.writerows(rows)
-        self.result_products.update(row.get(self.prod_id_colname) for row in rows if row)
-        self.total_rows += len(rows) if rows else 0
-
-
 @contextmanager
 def time_logger():
     start = time.monotonic()
@@ -192,90 +160,133 @@ async def fetch_batch(product_list, api_url, api_key, language):
 if __name__ == "__main__":
     kbc_datadir = os.environ.get("KBC_DATADIR")
 
-    utctime_started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    utctime_started = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
     cfg = docker.Config(kbc_datadir)
     parameters = cfg.get_parameters()
 
-    print(datetime.datetime.now(), 'EXTRACTION BEGINS')
     log("Extracting parameters from config.")
 
-    input_filename = parameters.get("input_filename")
+    cse_material_mapping_filename = parameters.get("cse_material_mapping_filename")
+    hourly_materials_filename = parameters.get("hourly_materials_filename")
+    runs_history_filename = parameters.get("runs_history_filename")
     output_result_filename = parameters.get("output_result_filename")
     output_fails_filename = parameters.get("output_fails_filename")
     product_id_column_name = parameters.get("product_id_column_name")
     wanted_columns = parameters.get("wanted_columns")
+    country = parameters.get('country')
+    distrchan = parameters.get('distrchan')
+    source = parameters.get('source')
     max_attempts = int(parameters.get("max_attempts", "1"))
 
     # log parameters (excluding sensitive designated by '#')
     log({k: v for k, v in parameters.items() if "#" not in k})
+
+    # decide run_type
+    runs_history = pd.read_csv(f'{kbc_datadir}in/tables/{runs_history_filename}.csv', parse_dates=['DATETIME'])
+    runs_today = runs_history[runs_history['DATETIME'].dt.date == datetime.utcnow().date()]
+    run_type = 'HOURLY' if 'DAILY' in runs_today['RUN_TYPE'].unique() else 'DAILY'
+    log(f'{run_type} load started.')
+
     # read unique product ids
-    with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
-        original_product_ids = {
-                int(row[product_id_column_name]) for row in csv.DictReader(input_file)
-            }
-        product_ids = list(original_product_ids)
+    cse_material_map = pd.read_csv(f'{kbc_datadir}in/tables/{cse_material_mapping_filename}.csv', dtype=str)
+    cse_material_map = cse_material_map[
+        (cse_material_map['country'] == country)
+        & (cse_material_map['distrchan'] == distrchan)
+        & (cse_material_map['source'] == source)
+        & (cse_material_map['material'] != '')
+        & pd.notnull(cse_material_map['material'])
+        & (cse_material_map[product_id_column_name] != '')
+        & pd.notnull(cse_material_map[product_id_column_name])
+    ]
+
+    if run_type == 'HOURLY':
+        hourly_materials_df = pd.read_csv(f'{kbc_datadir}in/tables/{hourly_materials_filename}.csv', dtype=str)
+        hourly_materials = set(hourly_materials_df['MATERIAL'].unique())
+        cse_material_map = cse_material_map[cse_material_map['material'].isin(hourly_materials)]
+
+    original_product_ids = set(cse_material_map[product_id_column_name].astype('int64'))
+    product_ids = list(original_product_ids)
 
     log(f"Input unique products: {len(original_product_ids)}")
     log(f"product_ids sample: {product_ids[:5]}")
 
-    with PriceWriter(
-                target_file_name=f'{kbc_datadir}out/tables/{output_result_filename}.csv',
-                colnames=wanted_columns + ['utctime_started'],
-                prod_id_colname='product_id',
-            ) as writer:
-        with time_logger():
-            attempts = defaultdict(int)
-            for batch_i, product_batch in enumerate(batches(product_ids, batch_size=9900, window_size=61)):
-                log(f"Downloading batch {batch_i}")
+    attempts = defaultdict(int)
+    output = []
 
-                for pid in product_batch:
-                    attempts[pid] += 1
+    with time_logger():
+        for batch_i, product_batch in enumerate(batches(product_ids, batch_size=9900, window_size=61)):
+            for pid in product_batch:
+                attempts[pid] += 1
 
-                result_list = asyncio.run(fetch_batch(
-                    product_list=product_batch,
-                    api_url=parameters.get("api_url"),
-                    api_key=parameters.get("#api_key"),
-                    language=parameters.get("language"),
-                ))
+            log(f"Scraping batch {batch_i}")
+            result_list = asyncio.run(fetch_batch(
+                product_list=product_batch,
+                api_url=parameters.get("api_url"),
+                api_key=parameters.get("#api_key"),
+                language=parameters.get("language"),
+            ))
+            log(f"Scraped batch {batch_i}")
 
-                # flatten and transform results
-                results = [
-                        # filter item columns to only relevant ones and add utctime_started
-                        {
-                            **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
-                            **{'utctime_started': utctime_started}
-                        }
-                        for sublist in result_list
-                        # drop empty sublists or None results
-                        if sublist
-                        for item in sublist
-                    ]
+            # flatten and transform results
+            results = [
+                    # filter item columns to only relevant ones and add utctime_started
+                    {
+                        **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
+                        **{'utctime_started': utctime_started}
+                    }
+                    for sublist in result_list if sublist
+                    for item in sublist
+                ]
+            output.extend(results)
+            log(f"Parsed batch {batch_i}")
 
-                log(f"Writing batch {batch_i}")
-                # append results to the target file
-                writer.writerows(results)
-                success_ids = {result['product_id'] for result in results}
-                failed_ids = set(product_batch).difference(success_ids)
+            success_ids = {result['product_id'] for result in results}
+            failed_ids = set(product_batch).difference(success_ids)
+
+            if max_attempts > 1:
                 failed_under_max_attempts = [
                     pid for pid in failed_ids
                     if attempts[pid] < max_attempts
                 ]
                 product_ids.extend(failed_under_max_attempts)
+            else:
+                failed_under_max_attempts = []
 
-                log(f'{len(success_ids)} IDs retrieved successfully')
-                log(f'{len(failed_ids)} IDs failed')
-                log(f'{len(failed_under_max_attempts)} IDs requeued for extraction')
+            log(f'{len(success_ids)} IDs retrieved successfully')
+            log(f'{len(failed_ids)} IDs failed')
+            log(f'{len(failed_under_max_attempts)} IDs requeued for extraction')
 
+    output = pd.DataFrame(output)
+    output = pd.concat([
+        output,
+        pd.DataFrame(columns=wanted_columns + ['utctime_started'])
+    ])
 
-        log(f"Output row #: {writer.total_rows}")
-        log(f"Output unique products #: {len(writer.result_products)}")
-
-        # log what was not returned
-        missing_products = list(original_product_ids - set(writer.result_products))
-
+    output = output.groupby(['product_id', 'shop_id', 'offer_id'], as_index=False).first()
+    scraped_products = set(output['product_id'].unique())
+    missing_products = list(original_product_ids - scraped_products)
+    log(f"Output unique products #: {len(scraped_products)}")
     log(f"Missing product #: {len(missing_products)}")
-    with open(f'{kbc_datadir}out/tables/{output_fails_filename}.csv', 'w', encoding='utf8') as missf:
-        missf.writelines(os.linesep.join(["product_id"] + list(map(str, missing_products))))
+
+    log('Saving data')
+    output.to_csv(f'{kbc_datadir}out/tables/{output_result_filename}.csv', index=False)
+
+    log('Saving runs history')
+    run_log = pd.DataFrame(
+        {
+            'DATETIME': [utctime_started],
+            'RUN_TYPE': [run_type],
+            'SUCCEEDED_COUNT': [len(scraped_products)],
+            'FAILED_COUNT': [len(missing_products)]
+        }
+    )
+    run_log['DATETIME'] = pd.to_datetime(run_log['DATETIME'])
+    runs_history = pd.concat([runs_today, run_log])
+    runs_history.to_csv(f'{kbc_datadir}out/tables/{runs_history_filename}.csv', index=False)
+
+    log('Saving missing products')
+    pd.DataFrame({product_id_column_name: missing_products}) \
+      .to_csv(f'{kbc_datadir}out/tables/{output_fails_filename}.csv', index=False)
 
     log("Script done.")
