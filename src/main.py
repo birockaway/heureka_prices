@@ -175,7 +175,6 @@ if __name__ == "__main__":
     product_id_column_name = parameters.get("product_id_column_name")
     wanted_columns = parameters.get("wanted_columns")
     country = parameters.get('country')
-    distrchan = parameters.get('distrchan')
     source = parameters.get('source')
     max_attempts = int(parameters.get("max_attempts", "1"))
 
@@ -192,7 +191,6 @@ if __name__ == "__main__":
     cse_material_map = pd.read_csv(f'{kbc_datadir}in/tables/{cse_material_mapping_filename}.csv', dtype=str)
     cse_material_map = cse_material_map[
         (cse_material_map['country'] == country)
-        & (cse_material_map['distrchan'] == distrchan)
         & (cse_material_map['source'] == source)
         & (cse_material_map['material'] != '')
         & pd.notnull(cse_material_map['material'])
