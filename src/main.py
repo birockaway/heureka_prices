@@ -176,6 +176,8 @@ if __name__ == "__main__":
     wanted_columns = parameters.get("wanted_columns")
     country = parameters.get('country')
     source = parameters.get('source')
+    batch_size = parameters.get('batch_size')
+    time_window_per_batch = parameters.get('time_window_per_batch')
     max_attempts = int(parameters.get("max_attempts", "1"))
 
     # log parameters (excluding sensitive designated by '#')
@@ -213,7 +215,7 @@ if __name__ == "__main__":
     written_ids = set()
 
     with time_logger():
-        for batch_i, product_batch in enumerate(batches(product_ids, batch_size=9900, window_size=61)):
+        for batch_i, product_batch in enumerate(batches(product_ids, batch_size=batch_size, window_size=time_window_per_batch)):
             for pid in product_batch:
                 attempts[pid] += 1
 
