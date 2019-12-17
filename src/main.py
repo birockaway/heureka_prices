@@ -36,7 +36,7 @@ def process_product(product_json):
             "top_shop",
             "category_position",
             "offer_attributes",
-            "images",
+            "images"
         }
     }
 
@@ -219,74 +219,77 @@ if __name__ == "__main__":
     attempts = defaultdict(int)
     written_ids = set()
 
-    with time_logger():
-        for batch_i, product_batch in enumerate(batches(product_ids, batch_size=batch_size, window_size=time_window_per_batch)):
-            for pid in product_batch:
-                attempts[pid] += 1
+    try:
+        with time_logger():
+            for batch_i, product_batch in enumerate(batches(product_ids, batch_size=batch_size, window_size=time_window_per_batch)):
+                for pid in product_batch:
+                    attempts[pid] += 1
 
-            log(f"Scraping batch {batch_i}")
-            result_list = asyncio.run(fetch_batch(
-                product_list=product_batch,
-                api_url=parameters.get("api_url"),
-                api_key=parameters.get("#api_key"),
-                language=parameters.get("language"),
-            ))
-            log(f"Scraped batch {batch_i}")
+                log(f"Scraping batch {batch_i}")
+                result_list = asyncio.run(fetch_batch(
+                    product_list=product_batch,
+                    api_url=parameters.get("api_url"),
+                    api_key=parameters.get("#api_key"),
+                    language=parameters.get("language"),
+                ))
+                log(f"Scraped batch {batch_i}")
 
-            # flatten and transform results
-            batch_results = [
-                    # filter item columns to only relevant ones and add utctime_started
-                    {
-                        **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
-                        **{'utctime_started': utctime_started}
-                    }
-                    for sublist in result_list if sublist
-                    for item in sublist
-                ]
-            log(f"Parsed batch {batch_i}")
+                # flatten and transform results
+                batch_results = [
+                        # filter item columns to only relevant ones and add utctime_started
+                        {
+                            **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
+                            **{'utctime_started': utctime_started}
+                        }
+                        for sublist in result_list if sublist
+                        for item in sublist
+                    ]
+                log(f"Parsed batch {batch_i}")
 
-            batch_output = pd.DataFrame(batch_results, columns=wanted_columns + ['utctime_started'])
-            batch_output = batch_output.groupby(['product_id', 'shop_id', 'offer_id'], as_index=False).first()
-            success_ids = set(batch_output['product_id'].unique())
-            failed_ids = set(product_batch).difference(success_ids)
+                batch_output = pd.DataFrame(batch_results, columns=wanted_columns + ['utctime_started'])
+                batch_output = batch_output.groupby(['product_id', 'shop_id', 'offer_id'], as_index=False).first()
+                success_ids = set(batch_output['product_id'].unique())
+                failed_ids = set(product_batch).difference(success_ids)
 
-            if max_attempts > 1:
-                failed_under_max_attempts = [
-                    pid for pid in failed_ids
-                    if attempts[pid] < max_attempts
-                ]
-                product_ids.extend(failed_under_max_attempts)
-            else:
-                failed_under_max_attempts = []
+                if max_attempts > 1:
+                    failed_under_max_attempts = [
+                        pid for pid in failed_ids
+                        if attempts[pid] < max_attempts
+                    ]
+                    product_ids.extend(failed_under_max_attempts)
+                else:
+                    failed_under_max_attempts = []
 
-            log(f'{len(success_ids)} IDs retrieved successfully')
-            log(f'{len(failed_ids)} IDs failed')
-            log(f'{len(failed_under_max_attempts)} IDs requeued for extraction')
+                log(f'{len(success_ids)} IDs retrieved successfully')
+                log(f'{len(failed_ids)} IDs failed')
+                log(f'{len(failed_under_max_attempts)} IDs requeued for extraction')
 
-            log(f'Saving batch {batch_i}')
-            batch_output.to_csv(f'{kbc_datadir}out/tables/{output_result_filename}.csv',
-                                index=False, mode='a', header=not batch_i, columns=sorted(batch_output.columns))
-            written_ids = written_ids.union(success_ids)
+                log(f'Saving batch {batch_i}')
+                batch_output.to_csv(f'{kbc_datadir}out/tables/{output_result_filename}.csv',
+                                    index=False, mode='a', header=not batch_i, columns=sorted(batch_output.columns))
+                written_ids = written_ids.union(success_ids)
 
-    missing_products = list(original_product_ids - written_ids)
-    log(f"Output unique products #: {len(written_ids)}")
-    log(f"Missing product #: {len(missing_products)}")
+        missing_products = list(original_product_ids - written_ids)
+        log(f"Output unique products #: {len(written_ids)}")
+        log(f"Missing product #: {len(missing_products)}")
 
-    log('Saving runs history')
-    run_log = pd.DataFrame(
-        {
-            'DATETIME': [utctime_started],
-            'RUN_TYPE': [run_type],
-            'SUCCEEDED_COUNT': [len(written_ids)],
-            'FAILED_COUNT': [len(missing_products)]
-        }
-    )
-    run_log['DATETIME'] = pd.to_datetime(run_log['DATETIME'])
-    runs_history = pd.concat([runs_today, run_log])
-    runs_history.to_csv(f'{kbc_datadir}out/tables/{runs_history_filename}.csv', index=False)
+        log('Saving runs history')
+        run_log = pd.DataFrame(
+            {
+                'DATETIME': [utctime_started],
+                'RUN_TYPE': [run_type],
+                'SUCCEEDED_COUNT': [len(written_ids)],
+                'FAILED_COUNT': [len(missing_products)]
+            }
+        )
+        run_log['DATETIME'] = pd.to_datetime(run_log['DATETIME'])
+        runs_history = pd.concat([runs_today, run_log])
+        runs_history.to_csv(f'{kbc_datadir}out/tables/{runs_history_filename}.csv', index=False)
 
-    log('Saving missing products')
-    pd.DataFrame({product_id_column_name: missing_products}) \
-      .to_csv(f'{kbc_datadir}out/tables/{output_fails_filename}.csv', index=False)
+        log('Saving missing products')
+        pd.DataFrame({product_id_column_name: missing_products}) \
+          .to_csv(f'{kbc_datadir}out/tables/{output_fails_filename}.csv', index=False)
 
-    log("Script done.")
+        log("Script done.")
+    except Exception as e:
+        print(e)
