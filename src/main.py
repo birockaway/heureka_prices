@@ -179,6 +179,7 @@ if __name__ == "__main__":
     batch_size = parameters.get('batch_size', 2490)
     time_window_per_batch = parameters.get('time_window_per_batch', 16)
     max_attempts = parameters.get("max_attempts", 1)
+    first_daily_load_utc_hour = int(parameters.get('first_daily_load_utc_hour', 3))
 
     # log parameters (excluding sensitive designated by '#')
     log({k: v for k, v in parameters.items() if "#" not in k})
@@ -186,7 +187,11 @@ if __name__ == "__main__":
     # decide run_type
     runs_history = pd.read_csv(f'{kbc_datadir}in/tables/{runs_history_filename}.csv', parse_dates=['DATETIME'])
     runs_today = runs_history[runs_history['DATETIME'].dt.date == datetime.utcnow().date()]
-    run_type = 'HOURLY' if 'DAILY' in runs_today['RUN_TYPE'].unique() else 'DAILY'
+    if ('DAILY' not in runs_today['RUN_TYPE'].unique()) \
+            and (datetime.utcnow().hour >= first_daily_load_utc_hour):
+        run_type = 'DAILY'
+    else:
+        run_type = 'HOURLY'
     log(f'{run_type} load started.')
 
     # read unique product ids
