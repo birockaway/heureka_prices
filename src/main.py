@@ -176,8 +176,8 @@ if __name__ == "__main__":
     wanted_columns = parameters.get("wanted_columns")
     country = parameters.get('country')
     source = parameters.get('source')
-    batch_size = parameters.get('batch_size')
-    time_window_per_batch = parameters.get('time_window_per_batch')
+    batch_size = parameters.get('batch_size', 2490)
+    time_window_per_batch = parameters.get('time_window_per_batch', 16)
     max_attempts = parameters.get("max_attempts", 1)
 
     # log parameters (excluding sensitive designated by '#')
