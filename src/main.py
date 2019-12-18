@@ -178,7 +178,7 @@ if __name__ == "__main__":
     source = parameters.get('source')
     batch_size = parameters.get('batch_size')
     time_window_per_batch = parameters.get('time_window_per_batch')
-    max_attempts = int(parameters.get("max_attempts", "1"))
+    max_attempts = parameters.get("max_attempts", 1)
 
     # log parameters (excluding sensitive designated by '#')
     log({k: v for k, v in parameters.items() if "#" not in k})
