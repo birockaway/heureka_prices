@@ -61,8 +61,8 @@ def process_offer(offer):
 
 
 def extract_eshop_homepage(url):
-    homepage = url.split('/')[0]
-    homepage = re.sub('http(.)?://(www.)?(obchod.)?', '', homepage, )
+    homepage = url.split('(/)')[0].rstrip('/')
+    homepage = re.sub('(http)?(s)?(://)?(www.)?', repl='', string=homepage)
     return homepage
 
 
