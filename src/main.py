@@ -9,7 +9,6 @@ import concurrent.futures
 import logging
 from contextlib import contextmanager
 import csv
-import re
 
 import pandas as pd
 import aiohttp
@@ -60,18 +59,11 @@ def process_offer(offer):
     return offer_items
 
 
-def extract_eshop_homepage(url):
-    homepage = url.split('(/)')[0].rstrip('/')
-    homepage = re.sub('(http)?(s)?(://)?(www.)?', repl='', string=homepage)
-    return homepage
-
-
 def process_shop(shop, index, index_name):
     """
     extracts shop level data from json response
     """
     shop_items = {"shop_" + k: v for k, v in shop.items() if k != "offers"}
-    shop_items["ESHOP"] = extract_eshop_homepage(shop_items.get("shop_homepage", ''))
     shop_items[index_name] = index
     shop_with_offers = [
         {**shop_items, **process_offer(offer)} for offer in shop["offers"]
@@ -241,6 +233,10 @@ def process_batch_output(batch_results, material_dictionary, naming_map):
     logging.info("Deduplicating batch.")
     success_ids = set(output["product_id"].astype("int64").unique())
     output = output.groupby(["product_id", "shop_id"], as_index=False).first()
+
+    logging.info('Extracting eshop names.')
+    output["ESHOP"] = output["shop_homepage"].str.replace(r'(-)(w+)$', r'.\2', regex=True)
+
     # no need to merge on country as the loop runs only for one country
     logging.info("Merging batch with material map.")
     output = pd.merge(
@@ -365,7 +361,7 @@ def producer(task_queue):
                             "SOURCE": "heureka",
                             "SOURCE_ID": f"heureka_{country}_{utctime_started_short}",
                             "FREQ": "d",
-                            "COUNTRY": country
+                            "COUNTRY": country,
                         },
                     }
                     for sublist in result_list
