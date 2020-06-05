@@ -472,7 +472,7 @@ if __name__ == "__main__":
 
     path = f'{os.getenv("KBC_DATADIR")}out/tables/results.csv'
 
-    pipeline = queue.Queue(maxsize=-1)
+    pipeline = queue.Queue(maxsize=1000)
     event = threading.Event()
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         executor.submit(producer, pipeline)
