@@ -42,7 +42,7 @@ def process_product(product_json):
             "images",
         }
     }
-    if (product_rating := product.get("rating")) is not None:
+    if (product_rating := product.get("product_rating")) is not None:
         product["product_rating_rating"] = product_rating.get("rating")
         product["product_rating_review_count"] = product_rating.get("review_count")
     return product
