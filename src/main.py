@@ -238,6 +238,7 @@ def process_batch_output(batch_results, material_dictionary, naming_map):
     logging.info('Extracting eshop names.')
     output["ESHOP"] = (output["shop_homepage"].map(lambda x: urlparse(x).netloc)
                        .str.replace(r'(www.)', r'', regex=True)
+                       .str.lower()
                        )
     # no need to merge on country as the loop runs only for one country
     logging.info("Merging batch with material map.")
