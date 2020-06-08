@@ -235,7 +235,9 @@ def process_batch_output(batch_results, material_dictionary, naming_map):
     output = output.groupby(["product_id", "shop_id"], as_index=False).first()
 
     logging.info('Extracting eshop names.')
-    output["ESHOP"] = output["shop_slug"].str.replace(r'(-)(\w+)$', r'.\2', regex=True)
+    output["ESHOP"] = (output["shop_homepage"].str.replace(r'(http)?(s)?(://)?(www.)?(obchod.)?', r'', regex=True)
+                       .str.replace(r'/[a-z]+(/)?', r'', regex=True)
+                       )
 
     # no need to merge on country as the loop runs only for one country
     logging.info("Merging batch with material map.")
