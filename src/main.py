@@ -9,6 +9,7 @@ import concurrent.futures
 import logging
 from contextlib import contextmanager
 import csv
+from urllib.parse import urlparse
 
 import pandas as pd
 import aiohttp
@@ -235,8 +236,8 @@ def process_batch_output(batch_results, material_dictionary, naming_map):
     output = output.groupby(["product_id", "shop_id"], as_index=False).first()
 
     logging.info('Extracting eshop names.')
-    output["ESHOP"] = (output["shop_homepage"].str.replace(r'(http)?(s)?(://)?(www.)?(obchod.)?', r'', regex=True)
-                       .str.replace(r'/[a-z]+(/)?', r'', regex=True)
+    output["ESHOP"] = (output["a"].map(lambda x: urlparse(x).netloc)
+                       .str.replace(r'(www\\.)', r'', regex=True)
                        )
     # no need to merge on country as the loop runs only for one country
     logging.info("Merging batch with material map.")
