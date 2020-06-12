@@ -223,38 +223,46 @@ def decide_run_type(runs_today_history, first_daily_load_utc_hour):
     return run_type
 
 
-def process_batch_output(batch_results, material_dictionary, naming_map):
+def process_batch_output(batch_results, material_dictionary, naming_map, out_cols):
     output = pd.DataFrame(batch_results, dtype=str)
-
+    logging.critical(f'Output size: {len(output)}, {len(material_dictionary)}')
     # take just one offer per eshop for a given product
     # later, we might want to select non-randomly
     # the process_response() function outputs rows with highlighted position and position separately
     # pandas first selects first non-null value
-    # this alse collapses the info in position and highlighted position to one row
+    # this also collapses the info in position and highlighted position to one row
     logging.info("Deduplicating batch.")
     success_ids = set(output["product_id"].astype("int64").unique())
+    start = datetime.utcnow()
     output = output.groupby(["product_id", "shop_id"], as_index=False).first()
-
+    logging.warning(f'DataFrame groupby time: {datetime.utcnow() - start}')
     logging.info('Extracting eshop names.')
+    start = datetime.utcnow()
     output["ESHOP"] = (output["shop_homepage"].map(lambda x: urlparse(x).netloc)
                        .str.replace(r'(www.)', r'', regex=True)
                        .str.lower()
                        )
+    logging.warning(f'ESHOP url parse time: {datetime.utcnow() - start}')
     # no need to merge on country as the loop runs only for one country
     logging.info("Merging batch with material map.")
     start = datetime.utcnow()
+    # first, rename columns
+    output = output.rename(columns=naming_map)
+    # second, get rid of columns that are not used
+    output = output[output.columns.intersection(out_cols)]
+    # third, merge dataframes
     output = pd.merge(
         output,
-        material_dictionary[["material", "distrchan", "cse_id"]],
+        material_dictionary[["material", "distrchan", "cse_id"]].rename(columns=str.upper),
         how="inner",
-        left_on=["product_id"],
-        right_on=["cse_id"],
+        left_on=["CSE_ID"],
+        right_on=["CSE_ID"]
     ).fillna("")
     logging.warning(f'Merge output-material_dict time: {datetime.utcnow() - start}')
-    output = output.rename(columns=naming_map)
     start = datetime.utcnow()
-    output = output.to_dict(orient="records")
-    logging.warning(f'Output.to_dict time: {datetime.utcnow() - start}')
+    # use only columns that are needed and exist in dataframe
+    output = output[output.columns.intersection(out_cols)].to_dict(orient="records")
+    logging.warning(f'output.to_dict time: {datetime.utcnow() - start}')
     return output, success_ids
 
 
@@ -276,7 +284,7 @@ def save_runs_history(**kwargs):
     )
 
 
-def producer(task_queue):
+def producer(task_queue, colnames):
     kbc_datadir = os.environ.get("KBC_DATADIR")
 
     utctime_started = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -360,7 +368,6 @@ def producer(task_queue):
                 )
                 logging.warning(f'Scraping time: {datetime.utcnow() - start}')
                 logging.info(f"Scraped batch {batch_i}")
-                start = datetime.utcnow()
                 # flatten and transform results
                 batch_results = [
                     # filter item columns to only relevant ones and add utctime_started
@@ -378,13 +385,13 @@ def producer(task_queue):
                     if sublist
                     for item in sublist
                 ]
-                logging.warning(f'merging batch_results time: {datetime.utcnow() - start}')
                 logging.info(f"Parsed batch {batch_i}")
                 start = datetime.utcnow()
                 batch_output, success_ids = process_batch_output(
                     batch_results,
                     material_dictionary=cse_material_map,
                     naming_map=columns_mapping,
+                    out_cols=colnames
                 )
                 logging.warning(f'process_batch_output time: {datetime.utcnow() - start}')
                 failed_ids = set(product_batch).difference(success_ids)
@@ -408,7 +415,6 @@ def producer(task_queue):
                 task_queue.put(batch_output)
 
                 written_ids = written_ids.union(success_ids)
-
 
             missing_products = list(original_product_ids - written_ids)
             logging.info(f"Output unique products #: {len(written_ids)}")
@@ -477,7 +483,7 @@ if __name__ == "__main__":
         "STOCK",
         "TOP",
         "TS",
-        "URL",
+        "URL"
     ]
 
     path = f'{os.getenv("KBC_DATADIR")}out/tables/results.csv'
@@ -485,5 +491,5 @@ if __name__ == "__main__":
     pipeline = queue.Queue(maxsize=1000)
     event = threading.Event()
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        executor.submit(producer, pipeline)
+        executor.submit(producer, pipeline, colnames)
         executor.submit(writer, pipeline, colnames, event, path)
