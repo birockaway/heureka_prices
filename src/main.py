@@ -225,7 +225,6 @@ def decide_run_type(runs_today_history, first_daily_load_utc_hour):
 
 def process_batch_output(batch_results, material_dictionary, naming_map, out_cols):
     output = pd.DataFrame(batch_results, dtype=str)
-    logging.critical(f'Output size: {len(output)}, {len(material_dictionary)}')
     # take just one offer per eshop for a given product
     # later, we might want to select non-randomly
     # the process_response() function outputs rows with highlighted position and position separately
@@ -235,14 +234,14 @@ def process_batch_output(batch_results, material_dictionary, naming_map, out_col
     success_ids = set(output["product_id"].astype("int64").unique())
     start = datetime.utcnow()
     output = output.groupby(["product_id", "shop_id"], as_index=False).first()
-    logging.warning(f'DataFrame groupby time: {datetime.utcnow() - start}')
+    logging.debug(f'DataFrame groupby time: {datetime.utcnow() - start}')
     logging.info('Extracting eshop names.')
     start = datetime.utcnow()
     output["ESHOP"] = (output["shop_homepage"].map(lambda x: urlparse(x).netloc)
                        .str.replace(r'(www.)', r'', regex=True)
                        .str.lower()
                        )
-    logging.warning(f'ESHOP url parse time: {datetime.utcnow() - start}')
+    logging.debug(f'ESHOP url parse time: {datetime.utcnow() - start}')
     # no need to merge on country as the loop runs only for one country
     logging.info("Merging batch with material map.")
     start = datetime.utcnow()
@@ -258,11 +257,11 @@ def process_batch_output(batch_results, material_dictionary, naming_map, out_col
         left_on=["CSE_ID"],
         right_on=["CSE_ID"]
     ).fillna("")
-    logging.warning(f'Merge output-material_dict time: {datetime.utcnow() - start}')
+    logging.debug(f'Merge output-material_dict time: {datetime.utcnow() - start}')
     start = datetime.utcnow()
     # use only columns that are needed and exist in dataframe
     output = output[output.columns.intersection(out_cols)].to_dict(orient="records")
-    logging.warning(f'output.to_dict time: {datetime.utcnow() - start}')
+    logging.debug(f'output.to_dict time: {datetime.utcnow() - start}')
     return output, success_ids
 
 
@@ -351,7 +350,7 @@ def producer(task_queue, colnames):
                         window_size=time_window_per_batch,
                     )
             ):
-                logging.warning(f'Starting timing for batch {batch_i}')
+                logging.debug(f'Starting timing for batch {batch_i}')
                 batch_start = datetime.utcnow()
                 for pid in product_batch:
                     attempts[pid] += 1
@@ -366,7 +365,7 @@ def producer(task_queue, colnames):
                         language=language,
                     )
                 )
-                logging.warning(f'Scraping time: {datetime.utcnow() - start}')
+                logging.debug(f'Scraping time: {datetime.utcnow() - start}')
                 logging.info(f"Scraped batch {batch_i}")
                 # flatten and transform results
                 batch_results = [
@@ -393,7 +392,7 @@ def producer(task_queue, colnames):
                     naming_map=columns_mapping,
                     out_cols=colnames
                 )
-                logging.warning(f'process_batch_output time: {datetime.utcnow() - start}')
+                logging.debug(f'process_batch_output time: {datetime.utcnow() - start}')
                 failed_ids = set(product_batch).difference(success_ids)
 
                 if max_attempts > 1:
@@ -404,8 +403,8 @@ def producer(task_queue, colnames):
                 else:
                     failed_under_max_attempts = []
 
-                logging.warning(f'BATCH TIME time: {datetime.utcnow() - batch_start}')
-                logging.warning(f'End of timing for batch {batch_i}')
+                logging.debug(f'BATCH TIME time: {datetime.utcnow() - batch_start}')
+                logging.debug(f'End of timing for batch {batch_i}')
                 logging.info(f"{len(success_ids)} IDs retrieved successfully")
                 logging.info(f"{len(failed_ids)} IDs failed")
                 logging.info(f"{len(failed_under_max_attempts)} IDs requeued for extraction")
@@ -429,7 +428,7 @@ def producer(task_queue, colnames):
                 runs_today=runs_today,
                 runs_history_filename=runs_history_filename
             )
-            logging.warning(f'merging batch_results time: {datetime.utcnow() - start}')
+            logging.debug(f'merging batch_results time: {datetime.utcnow() - start}')
 
     logging.info("Producer completed. Putting DONE to queue.")
     task_queue.put("DONE")
@@ -451,7 +450,7 @@ def writer(task_queue, columns_list, threading_event, filepath):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger()
     try:
         logging_gelf_handler = logging_gelf.handlers.GELFTCPSocketHandler(host=os.getenv('KBC_LOGGER_ADDR'),
