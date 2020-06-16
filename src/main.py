@@ -4,11 +4,9 @@ from datetime import datetime
 from collections import defaultdict
 import os
 import queue
-import threading
 import concurrent.futures
 import logging
 from contextlib import contextmanager
-import csv
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -16,6 +14,7 @@ import aiohttp
 import logging_gelf.handlers
 import logging_gelf.formatters
 from keboola import docker
+from extractors_writer import Writer
 
 
 def process_product(product_json):
@@ -132,7 +131,7 @@ def batches(product_list, batch_size, window_size, sleep_time=5):
         del product_list[:batch_size]
 
         while time.monotonic() - window_start < window_size:
-            logging.info("waiting for time window to expire...")
+            logging.debug("waiting for time window to expire...")
             time.sleep(sleep_time)
         window_start = time.monotonic()
         yield batch
@@ -408,11 +407,8 @@ def producer(task_queue, colnames):
                 logging.info(f"{len(success_ids)} IDs retrieved successfully")
                 logging.info(f"{len(failed_ids)} IDs failed")
                 logging.info(f"{len(failed_under_max_attempts)} IDs requeued for extraction")
-
                 logging.info(f"Queueing batch {batch_i}")
-
                 task_queue.put(batch_output)
-
                 written_ids = written_ids.union(success_ids)
 
             missing_products = list(original_product_ids - written_ids)
@@ -434,35 +430,18 @@ def producer(task_queue, colnames):
     task_queue.put("DONE")
 
 
-def writer(task_queue, columns_list, threading_event, filepath):
-    with open(filepath, "w+") as outfile:
-        results_writer = csv.DictWriter(
-            outfile, fieldnames=columns_list, extrasaction="ignore"
-        )
-        results_writer.writeheader()
-        while not threading_event.is_set():
-            chunk = task_queue.get()
-            if chunk == "DONE":
-                logging.info("DONE received. Exiting.")
-                threading_event.set()
-            else:
-                results_writer.writerows(chunk)
-
-
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, handlers=[])
     logger = logging.getLogger()
     try:
         logging_gelf_handler = logging_gelf.handlers.GELFTCPSocketHandler(host=os.getenv('KBC_LOGGER_ADDR'),
                                                                           port=int(os.getenv('KBC_LOGGER_PORT')))
-        # remove stdout logging when running inside keboola
-        logger.removeHandler(logger.handlers[0])
     except TypeError:
         logging_gelf_handler = logging.StreamHandler()
 
     logging_gelf_handler.setFormatter(logging_gelf.formatters.GELFFormatter(null_character=True))
     logger.addHandler(logging_gelf_handler)
-
+    logger.critical(logging_gelf_handler)
     colnames = [
         "AVAILABILITY",
         "COUNTRY",
@@ -486,9 +465,8 @@ if __name__ == "__main__":
     ]
 
     path = f'{os.getenv("KBC_DATADIR")}out/tables/results.csv'
-
     pipeline = queue.Queue(maxsize=1000)
-    event = threading.Event()
+    writer = Writer(pipeline, colnames, path)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         executor.submit(producer, pipeline, colnames)
-        executor.submit(writer, pipeline, colnames, event, path)
+        executor.submit(writer)
