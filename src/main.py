@@ -8,6 +8,7 @@ import concurrent.futures
 import logging
 from contextlib import contextmanager
 from urllib.parse import urlparse
+from traceback import format_tb
 
 import pandas as pd
 import aiohttp
@@ -78,7 +79,6 @@ def process_response(response_json):
 
     try:
         response_content = response_json["result"]["product"]
-
     except Exception as e:
         logging.debug("Response does not contain product data.")
         logging.debug(f"Exception {e}")
@@ -120,7 +120,6 @@ def process_response(response_json):
 
         except Exception as e:
             logging.error(e)
-
             return None
 
 
@@ -283,151 +282,156 @@ def save_runs_history(**kwargs):
 
 
 def producer(task_queue, colnames):
-    kbc_datadir = os.environ.get("KBC_DATADIR")
+    try:
+        kbc_datadir = os.environ.get("KBC_DATADIR")
 
-    utctime_started = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    utctime_started_short = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        utctime_started = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        utctime_started_short = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
-    cfg = docker.Config(kbc_datadir)
-    parameters = cfg.get_parameters()
+        cfg = docker.Config(kbc_datadir)
+        parameters = cfg.get_parameters()
 
-    logging.info("Extracting parameters from config.")
+        logging.info("Extracting parameters from config.")
 
-    cse_material_mapping_filename = parameters.get("cse_material_mapping_filename")
-    columns_mapping = parameters.get("columns_mapping")
-    api_key = parameters.get("#api_key")
-    countries_to_scrape = parameters.get("countries_to_scrape")
-    # log parameters (excluding sensitive designated by '#')
-    logging.info({k: v for k, v in parameters.items() if "#" not in k})
+        cse_material_mapping_filename = parameters.get("cse_material_mapping_filename")
+        columns_mapping = parameters.get("columns_mapping")
+        api_key = parameters.get("#api_key")
+        countries_to_scrape = parameters.get("countries_to_scrape")
+        # log parameters (excluding sensitive designated by '#')
+        logging.info({k: v for k, v in parameters.items() if "#" not in k})
 
-    for country in countries_to_scrape:
-        logging.info(f"Running scraper for country: {country}")
-        logging.info(parameters.get(country))
-        api_url = parameters.get(country).get("api_url")
-        language = parameters.get(country).get("language")
-        hourly_materials_filename = parameters.get(country).get(
-            "hourly_materials_filename"
-        )
-        runs_history_filename = parameters.get(country).get("runs_history_filename")
-        batch_size = parameters.get(country).get("batch_size", 2490)
-        time_window_per_batch = parameters.get(country).get(
-            "time_window_per_batch", 16
-        )
-        max_attempts = parameters.get(country).get("max_attempts", 1)
-        first_daily_load_utc_hour = int(
-            parameters.get(country).get("first_daily_load_utc_hour", 3)
-        )
-
-        # decide run_type
-        logging.info('Loading runs history.')
-        runs_today = load_todays_runs_history(kbc_datadir, runs_history_filename)
-        run_type = decide_run_type(runs_today, first_daily_load_utc_hour)
-        logging.info('Loading materials map.')
-        cse_material_map = load_full_material_map(
-            kbc_datadir, cse_material_mapping_filename, country
-        )
-
-        if run_type == "HOURLY":
-            cse_material_map = load_hourly_material_map(
-                kbc_datadir, hourly_materials_filename, cse_material_map
+        for country in countries_to_scrape:
+            logging.info(f"Running scraper for country: {country}")
+            logging.info(parameters.get(country))
+            api_url = parameters.get(country).get("api_url")
+            language = parameters.get(country).get("language")
+            hourly_materials_filename = parameters.get(country).get(
+                "hourly_materials_filename"
+            )
+            runs_history_filename = parameters.get(country).get("runs_history_filename")
+            batch_size = parameters.get(country).get("batch_size", 2490)
+            time_window_per_batch = parameters.get(country).get(
+                "time_window_per_batch", 16
+            )
+            max_attempts = parameters.get(country).get("max_attempts", 1)
+            first_daily_load_utc_hour = int(
+                parameters.get(country).get("first_daily_load_utc_hour", 3)
             )
 
-        original_product_ids = set(cse_material_map["cse_id"].astype("int64"))
-        product_ids = list(original_product_ids)
-
-        logging.info(f"Input unique products: {len(original_product_ids)}")
-        logging.info(f"product_ids sample: {product_ids[:5]}")
-
-        attempts = defaultdict(int)
-        written_ids = set()
-
-        with time_logger():
-            for batch_i, product_batch in enumerate(
-                    batches(
-                        product_ids,
-                        batch_size=batch_size,
-                        window_size=time_window_per_batch,
-                    )
-            ):
-                logging.debug(f'Starting timing for batch {batch_i}')
-                batch_start = datetime.utcnow()
-                for pid in product_batch:
-                    attempts[pid] += 1
-
-                logging.info(f"Scraping batch {batch_i}")
-                start = datetime.utcnow()
-                result_list = asyncio.run(
-                    fetch_batch(
-                        product_list=product_batch,
-                        api_url=api_url,
-                        api_key=api_key,
-                        language=language,
-                    )
+            # decide run_type
+            logging.info('Loading runs history.')
+            runs_today = load_todays_runs_history(kbc_datadir, runs_history_filename)
+            run_type = decide_run_type(runs_today, first_daily_load_utc_hour)
+            logging.info('Loading materials map.')
+            cse_material_map = load_full_material_map(
+                kbc_datadir, cse_material_mapping_filename, country
+            )
+            if run_type == "HOURLY":
+                cse_material_map = load_hourly_material_map(
+                    kbc_datadir, hourly_materials_filename, cse_material_map
                 )
-                logging.debug(f'Scraping time: {datetime.utcnow() - start}')
-                logging.info(f"Scraped batch {batch_i}")
-                # flatten and transform results
-                batch_results = [
-                    # filter item columns to only relevant ones and add utctime_started
-                    {
-                        **{colname: colval for colname, colval in item.items()},
-                        **{
-                            "TS": utctime_started,
-                            "SOURCE": "heureka",
-                            "SOURCE_ID": f"heureka_{country}_{utctime_started_short}",
-                            "FREQ": "d",
-                            "COUNTRY": country,
-                        },
-                    }
-                    for sublist in result_list
-                    if sublist
-                    for item in sublist
-                ]
-                logging.info(f"Parsed batch {batch_i}")
-                start = datetime.utcnow()
-                batch_output, success_ids = process_batch_output(
-                    batch_results,
-                    material_dictionary=cse_material_map,
-                    naming_map=columns_mapping,
-                    out_cols=colnames
-                )
-                logging.debug(f'process_batch_output time: {datetime.utcnow() - start}')
-                failed_ids = set(product_batch).difference(success_ids)
 
-                if max_attempts > 1:
-                    failed_under_max_attempts = [
-                        pid for pid in failed_ids if attempts[pid] < max_attempts
+            original_product_ids = set(cse_material_map["cse_id"].astype("int64"))
+            product_ids = list(original_product_ids)
+
+            logging.info(f"Input unique products: {len(original_product_ids)}")
+            logging.info(f"product_ids sample: {product_ids[:5]}")
+
+            attempts = defaultdict(int)
+            written_ids = set()
+
+            with time_logger():
+                for batch_i, product_batch in enumerate(
+                        batches(
+                            product_ids,
+                            batch_size=batch_size,
+                            window_size=time_window_per_batch,
+                        )
+                ):
+                    logging.debug(f'Starting timing for batch {batch_i}')
+                    batch_start = datetime.utcnow()
+                    for pid in product_batch:
+                        attempts[pid] += 1
+
+                    logging.info(f"Scraping batch {batch_i}")
+                    start = datetime.utcnow()
+                    result_list = asyncio.run(
+                        fetch_batch(
+                            product_list=product_batch,
+                            api_url=api_url,
+                            api_key=api_key,
+                            language=language,
+                        )
+                    )
+                    logging.debug(f'Scraping time: {datetime.utcnow() - start}')
+                    logging.info(f"Scraped batch {batch_i}")
+                    # flatten and transform results
+                    batch_results = [
+                        # filter item columns to only relevant ones and add utctime_started
+                        {
+                            **{colname: colval for colname, colval in item.items()},
+                            **{
+                                "TS": utctime_started,
+                                "SOURCE": "heureka",
+                                "SOURCE_ID": f"heureka_{country}_{utctime_started_short}",
+                                "FREQ": "d",
+                                "COUNTRY": country,
+                            },
+                        }
+                        for sublist in result_list
+                        if sublist
+                        for item in sublist
                     ]
-                    product_ids.extend(failed_under_max_attempts)
-                else:
-                    failed_under_max_attempts = []
+                    logging.info(f"Parsed batch {batch_i}")
+                    start = datetime.utcnow()
+                    batch_output, success_ids = process_batch_output(
+                        batch_results,
+                        material_dictionary=cse_material_map,
+                        naming_map=columns_mapping,
+                        out_cols=colnames
+                    )
+                    logging.debug(f'process_batch_output time: {datetime.utcnow() - start}')
+                    failed_ids = set(product_batch).difference(success_ids)
 
-                logging.debug(f'BATCH TIME time: {datetime.utcnow() - batch_start}')
-                logging.debug(f'End of timing for batch {batch_i}')
-                logging.info(f"{len(success_ids)} IDs retrieved successfully")
-                logging.info(f"{len(failed_ids)} IDs failed")
-                logging.info(f"{len(failed_under_max_attempts)} IDs requeued for extraction")
-                logging.info(f"Queueing batch {batch_i}")
-                task_queue.put(batch_output)
-                written_ids = written_ids.union(success_ids)
+                    if max_attempts > 1:
+                        failed_under_max_attempts = [
+                            pid for pid in failed_ids if attempts[pid] < max_attempts
+                        ]
+                        product_ids.extend(failed_under_max_attempts)
+                    else:
+                        failed_under_max_attempts = []
 
-            missing_products = list(original_product_ids - written_ids)
-            logging.info(f"Output unique products #: {len(written_ids)}")
-            logging.info(f"Missing product #: {len(missing_products)}")
-            start = datetime.utcnow()
-            save_runs_history(
-                datadir=kbc_datadir,
-                utctime_started=utctime_started,
-                run_type=run_type,
-                missing_products=missing_products,
-                written_ids=written_ids,
-                runs_today=runs_today,
-                runs_history_filename=runs_history_filename
-            )
-            logging.debug(f'merging batch_results time: {datetime.utcnow() - start}')
+                    logging.debug(f'BATCH TIME time: {datetime.utcnow() - batch_start}')
+                    logging.debug(f'End of timing for batch {batch_i}')
+                    logging.info(f"{len(success_ids)} IDs retrieved successfully")
+                    logging.info(f"{len(failed_ids)} IDs failed")
+                    logging.info(f"{len(failed_under_max_attempts)} IDs requeued for extraction")
+                    logging.info(f"Queueing batch {batch_i}")
+                    task_queue.put(batch_output)
+                    written_ids = written_ids.union(success_ids)
 
-    logging.info("Producer completed. Putting DONE to queue.")
-    task_queue.put("DONE")
+                missing_products = list(original_product_ids - written_ids)
+                logging.info(f"Output unique products #: {len(written_ids)}")
+                logging.info(f"Missing product #: {len(missing_products)}")
+                start = datetime.utcnow()
+                save_runs_history(
+                    datadir=kbc_datadir,
+                    utctime_started=utctime_started,
+                    run_type=run_type,
+                    missing_products=missing_products,
+                    written_ids=written_ids,
+                    runs_today=runs_today,
+                    runs_history_filename=runs_history_filename
+                )
+                logging.debug(f'merging batch_results time: {datetime.utcnow() - start}')
+
+        logging.info("Producer completed. Putting DONE to queue.")
+    except Exception as e:
+        logging.error(e)
+        trace = 'Traceback:\n' + ''.join(format_tb(e.__traceback__))
+        logging.error(trace)
+    finally:
+        task_queue.put("DONE")
 
 
 if __name__ == "__main__":
@@ -441,7 +445,7 @@ if __name__ == "__main__":
 
     logging_gelf_handler.setFormatter(logging_gelf.formatters.GELFFormatter(null_character=True))
     logger.addHandler(logging_gelf_handler)
-    logger.critical(logging_gelf_handler)
+
     colnames = [
         "AVAILABILITY",
         "COUNTRY",
