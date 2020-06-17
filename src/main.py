@@ -427,9 +427,8 @@ def producer(task_queue, colnames):
 
         logging.info("Producer completed. Putting DONE to queue.")
     except Exception as e:
-        logging.error(e)
         trace = 'Traceback:\n' + ''.join(format_tb(e.__traceback__))
-        logging.error(trace)
+        logging.error(f'Error occurred {e}', extra={'full_message': trace})
     finally:
         task_queue.put("DONE")
 
